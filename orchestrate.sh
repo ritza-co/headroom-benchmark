@@ -11,7 +11,7 @@ mkdir -p "$RUNS_DIR"
 VANILLA_VM="headroom-vanilla"
 WRAP_VM="headroom-wrap"
 MODEL="gpt-5.5"
-TIMEOUT_SECS="${TIMEOUT_SECS:-1500}"  # 25 min per run
+TIMEOUT_SECS="${TIMEOUT_SECS:-2400}"  # 40 min per run (v2 task is heavier)
 
 CODEX_BASE_ARGS=(
   --skip-git-repo-check
@@ -139,8 +139,8 @@ PY
   cat "$out_dir/summary.json"
 }
 
-# Alternating order spreads time-of-day API variance fairly
-ORDER=(vanilla wrap vanilla wrap vanilla wrap)
+# Alternating order spreads time-of-day API variance fairly.
+# Odd-indexed trials (1,3,5,...) are vanilla; even (2,4,6,...) are wrap.
 
 # Optionally run only specific trials:  ./orchestrate.sh 1 2   (runs only trials 1 and 2)
 TRIALS=("$@")
@@ -149,7 +149,7 @@ if [[ ${#TRIALS[@]} -eq 0 ]]; then
 fi
 
 for i in "${TRIALS[@]}"; do
-  mode="${ORDER[$((i-1))]}"
+  if (( i % 2 == 1 )); then mode="vanilla"; else mode="wrap"; fi
   run_trial "$i" "$mode"
   # Commit after every trial so we never lose data if the next one blows up.
   cd "$REPO_ROOT"
