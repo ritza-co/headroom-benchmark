@@ -1,0 +1,12 @@
+{
+  "mode": "vanilla",
+  "trial": 1,
+  "wall_secs": 160,
+  "turns": 1,
+  "input_tokens": 361375,
+  "cached_input_tokens": 298880,
+  "fresh_input_tokens": 62495,
+  "output_tokens": 5948,
+  "reasoning_output_tokens": 1197,
+  "total_billed_tokens": 69640
+}
