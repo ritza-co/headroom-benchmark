@@ -1,0 +1,6 @@
+bash: line 1: cd: /tmp/headroom-benchmark: No such file or directory
+Reading additional input from stdin...
+2026-06-04T14:47:58.336886Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /tmp/bench-run-6-wrap/README.md:
+# Hn Tracker
+
+Describe your project here.
