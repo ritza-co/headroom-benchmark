@@ -2,88 +2,79 @@
 
 ## TL;DR
 
-**On this workload, `headroom wrap codex` did not reduce billed token usage in any meaningful way.**
+**Headroom's token savings scale with task size. On a small task it's a wash; on a heavy, tool-rich task it cut billed tokens ~25–31%.**
 
-Mean billed tokens: vanilla **60,528** vs wrap **60,737** — a 0.3% increase, deep inside the noise floor (both modes span more than 24% within their own three runs).
+| Round | Task | Vanilla billed (mean) | Wrap billed (mean) | Savings | Verdict |
+|-------|------|----------------------:|-------------------:|--------:|---------|
+| 1 | Small 3-command CLI | 60,528 | 60,737 | +0.3% | ❌ Not worth it |
+| 2 | Heavy 8-command CLI (FTS5, async, CI, Docker) | 118,751 | 89,566 | **−24.6% mean / −31.0% median** | 🟡 Worth it, with caveats |
 
-Mean wall time: vanilla **166.7s** vs wrap **198.3s** — wrap was **19% slower** on average.
+12/12 runs shipped a working, feature-complete app (tests pass, live DB populated). Headroom never broke the agent.
 
-All six runs produced a working app: tests pass, `hn.db` populated with 10 live HN stories.
+The caveats on Round 2: ~15% more wall-clock time and ~20% more tool calls. And the mean saving (24.6%) lands just under the pre-registered 25% "clearly worth it" bar — though the median (31%) clears it comfortably.
 
-Against the [pre-registered criteria](README.md#pre-registered-verdict-criteria), this is a **❌ Not worth it** verdict — *for this workload*. Important caveats below.
+## What changed between rounds
 
-## What we actually saw
+Round 1 was a 3-command CLI: ~17–22 tool calls, terse shell output, ~60k billed tokens. Round 2 was an 8-command CLI with FTS5 search, async fetching, structlog, Dockerfile, GitHub Actions CI, a CHANGELOG, and 10+ tests: ~25–41 tool calls, far more file reads, more test-suite runs, ~119k billed tokens for vanilla.
 
-### Headroom's machinery did engage
+That ~2x increase in raw work is what gave Headroom something to compress. The numbers tell the story cleanly:
 
-The wrap runs used the bundled `rtk` context-rewriting tool 1–2 times each (e.g. `rtk proxy python ...` in trial 6) and ran with the headroom MCP retrieve tool registered. So we weren't just paying for an idle proxy — Headroom was actively in the loop.
+- **Fresh input tokens** (the thing Headroom compresses) dropped −2.2% on the small task but −29.4% (mean) / −39.1% (median) on the heavy task.
+- That input compression flowed straight through to the bill: −0.3% small, −24.6% heavy.
 
-### Fresh input tokens dropped a tiny amount
+## Why the small task was a wash
 
-Vanilla mean fresh input: 53,621. Wrap mean fresh input: 52,437. About a 2% saving on the side Headroom is designed to compress. Real but small.
+1. **Most input was already cached.** ~80% of input tokens were `cached_input` (Codex's system prompt + tool schemas), which OpenAI bills at a steep discount. On a short session there's barely any *fresh* conversational context to compress.
+2. **Shell output was terse.** `uv add`, `pytest -q`, `git status --short` — Headroom's `rtk` tool advertises "60–90% savings on shell output," but our small-task output was already tiny.
+3. **Headroom adds its own context.** The injected `AGENTS.md` + rtk instructions + MCP retrieval rules are part of the prompt. On a short task that overhead roughly cancels the savings.
 
-### Output tokens went UP
+## Why the heavy task paid off
 
-Vanilla mean output: 5,859. Wrap mean output: 7,208 (+23%). Trial 6 is the outlier (9,528 output tokens) — it had a test failure on the first `uv run pytest` (`CliRunner has no attribute isolated_filesystem`, a typer version mismatch) and burned extra output explaining and fixing it. The other two wrap runs had output tokens in the 6,000s — comparable to vanilla.
+1. **Verbose, repeated tool output.** `pytest -v` (per-test names), `tree -L 2`, multiple full test-suite re-runs after each change, larger file reads. This is exactly the shell-output bulk `rtk` rewrites.
+2. **Accumulating history.** More turns means more conversation to carry forward; compressing it compounds across the session.
+3. **The compression overhead amortizes.** Headroom's fixed context cost is a smaller fraction of a big session.
 
-Even excluding trial 6, wrap output is ~3.5% higher than vanilla. The wrap-side AGENTS.md additions (rtk usage instructions, headroom MCP retrieval rules) likely encourage longer agent messages.
+## The cost side (don't ignore it)
 
-### Wall time was consistently worse with wrap
+- **Wall-clock: +15% slower** on the heavy task (and +19% on the small one). The proxy hop plus `rtk` subprocesses add real latency. If you're paying for tokens, that's a win; if you're waiting at a terminal, it's a tax.
+- **Tool calls: +20% more** with Headroom. The rtk workflow nudges the agent toward more, smaller commands. More calls, but each one's output is cheaper.
+- **Output tokens: +5–7% more.** The wrap-side AGENTS.md encourages slightly chattier agent messages. Output is the expensive side of the bill, so this partially offsets the input savings (the saving is still strongly net-positive on the heavy task).
 
-Three vanilla runs averaged 166.7s. Three wrap runs averaged 198.3s — even excluding trial 6's outlier, the remaining two wrap runs (171s, 173s) averaged 172s, still ~3% slower than vanilla. The extra hop through the proxy + the rtk subprocesses add real latency.
+## Forensic notes from the transcripts
 
-## Why didn't Headroom help?
+- **Trial 12 (wrap) is the cautionary outlier.** It only saved ~8% (112,475 billed vs ~119k vanilla mean) where trials 8 and 10 saved 30–40%. Its fresh input stayed high (98,162). Same prompt, same wrapper — but compression effectiveness varies run to run. This is why single-run "I saved 40%!" claims are unreliable; report medians over multiple runs.
+- **Headroom's rtk tool actively engaged** in the wrap runs (e.g. `rtk proxy python ...`), and trial 8 logged 41 tool calls vs the vanilla ~25 — concrete evidence the rtk-driven workflow shifts the agent toward more granular commands.
+- **Every heavy run designed a different DB schema** (`stories`, `story_snapshots`, `story_search`) and a different test count (10–13). That's normal LLM nondeterminism on an open-ended prompt — both modes did it, so it doesn't bias the comparison.
+- **All runs hit the live HN API and populated the DB**, satisfying the "don't stub the final fetch" requirement. The apps are real.
 
-A few honest hypotheses, none yet tested:
+## Verdict against pre-registered criteria
 
-1. **The session is short.** ~17–22 tool calls per run, ~3,000 chars of agent output. Most of the input token budget (~80%) is *cached* system prompt + tool definitions, not user-generated conversational context. Headroom can compress conversation history and tool output, but if there isn't much, there's not much to compress.
+The [criteria](README.md#pre-registered-verdict-criteria) were fixed before any runs:
 
-2. **Tool outputs are small.** `uv add`, `pytest -q`, `git status --short`, file reads of <100-line files. The `rtk` tool's headline pitch is "60–90% savings on shell output" — but our shell output was already terse.
+- **Small task → ❌ Not worth it.** <10% savings (actually +0.3%). The install isn't justified for short one-shot Codex tasks.
+- **Heavy task → 🟡 Worth it, with caveats.** 24.6% mean / 31.0% median savings (the 10–25% band, brushing the 25% line), all 3 runs shipped working apps — but at +15% wall-clock time. If you're optimizing the API bill on long, tool-heavy agent sessions, Headroom earns its place. If you're optimizing for speed at the terminal, the time tax may not be worth it.
 
-3. **Codex already caches aggressively.** ~80% of input tokens were `cached_input` in every run. OpenAI bills cached input at a steep discount, so the *billable* input was already small (~50k tokens). Headroom's compression has less to bite on top.
+## Practical guidance
 
-4. **Headroom adds its own context.** The injected `AGENTS.md` and rtk usage instructions ARE part of the prompt the model sees. On a short task that overhead can erase the savings.
+| If you're running… | Recommendation |
+|---|---|
+| Short one-shot Codex tasks (build a small script, fix one bug) | **Skip Headroom** — no measurable token win, pure latency cost. |
+| Long, tool-heavy agent sessions (big refactors, multi-file features, lots of test runs) | **Try Headroom** — expect ~25–30% token savings, accept ~15% more wall time. |
+| Cost-sensitive API-key billing at scale | **Worth piloting** on your real workloads; the savings compound. |
+| ChatGPT-subscription users (like this test) | Marginal token cost is $0, so the bill argument doesn't apply — only consider Headroom for privacy/observability/memory features this benchmark didn't test. |
+| Privacy / on-prem needs | Headroom's real pitch is data-locality, not the token bill. Evaluate on that axis separately. |
 
-## Where Headroom might still earn its keep
+## What we still didn't test
 
-This experiment doesn't test:
+- **Sessions longer than ~7 minutes** / 40+ turns, where context-history compression should compound further.
+- **Headroom's persistent cross-session memory and multi-agent `SharedContext`** — invisible in single-session runs.
+- **Models other than `gpt-5.5`** (we were limited to it by ChatGPT-subscription auth).
+- **Repos with large existing codebases** the agent must read (we started from empty dirs).
 
-- **Long sessions.** A 50-turn agentic build with accumulating context history. That's where context compression theoretically pays off the most.
-- **Tool-output-heavy work.** Running a real test suite that spews 10k lines, or `ls -R` on a big repo, or `git log` on a busy branch. rtk's pitch lives here.
-- **Multi-agent / shared-memory workflows.** Headroom's `SharedContext` is invisible in a single short Codex session.
-- **Cross-session work.** Persistent memory across days isn't exercised here.
-- **API-key billing.** ChatGPT subscription auth means we pay $0 per token in this test. Headroom's other promised wins (privacy, observability, audit) aren't billed in dollars.
+If you test any of these, please open an issue — especially with a counter-result.
 
-## Was anything weird in the transcripts?
+## Reproduce or argue
 
-A short forensic tour:
+Everything's here: [`PROMPT.md`](PROMPT.md) / [`PROMPT-v1.md`](PROMPT-v1.md), [`orchestrate.sh`](orchestrate.sh), and `runs/run-N-*/` with full Codex JSON streams, parsed summaries, stderr, and workspace tarballs.
 
-- **Trial 6** spent 251s (vs 151–189 for everyone else). It hit a typer/CliRunner version-compatibility test failure on first `pytest`, then debugged its way to green. This is the kind of incident Headroom *should* help with — the failing test output, traceback, and fix iterations are exactly what context compression targets. It still landed at 67,217 billed tokens, which is in line with the other runs, not dramatically worse. So Headroom may have *prevented* this run from being much worse — but we have no counterfactual.
-
-- **Trial 5** (vanilla) used `curl https://pypi.org/pypi/pytest/json | jq -r .info.version` instead of the `web_search` tool to look up versions. That's a shell-tool substitution for an LLM tool call — slightly more efficient, no model help needed. Headroom wraps would benefit from teaching `rtk` to summarize PyPI JSON, but this run didn't go through Headroom anyway.
-
-- **Trial 4** (wrap) chose `typer==0.26.7` instead of `0.24.1` (the version trial 1 picked). Slightly different version pinning across runs — both work; just a reminder that "the same prompt" can lead to slightly different code.
-
-- **All wrap runs** wrote an `AGENTS.md` to the working directory. None of the vanilla runs did. This is Headroom installing its rtk/MCP instructions. It's transparent — but it does mean the wrap runs left a small bit of Headroom residue in the workspace, which is fine for a one-shot but worth knowing if you're version-controlling project AGENTS.md.
-
-## So who is this for?
-
-If you're running:
-
-- **Short to medium one-shot Codex tasks** like in this benchmark → **save yourself the install**, the math doesn't work.
-- **Long-running agentic loops** with big tool output → **probably worth re-testing** with a longer task; the wins should compound. We'd want to see Headroom's pitch on something like a 30-minute Codex session that reads a 5k-line codebase.
-- **Multi-agent or persistent-memory workflows** → Headroom has features here that this benchmark doesn't exercise at all; can't comment.
-- **Privacy / on-prem requirements** → Headroom's value isn't tokens at all; it's keeping context on your machine. Don't pick it for the bill-reduction story; pick it for the data-locality story.
-
-## Reproduce or argue with me
-
-Everything is in this repo:
-- [`PROMPT.md`](PROMPT.md) — the task
-- [`orchestrate.sh`](orchestrate.sh) — the driver
-- `runs/run-N-{vanilla,wrap}/events.jsonl` — full Codex JSON streams, every tool call captured
-- `runs/run-N-{vanilla,wrap}/summary.json` — parsed metrics
-- `runs/run-N-{vanilla,wrap}/workspace.tar.gz` — the resulting code (gitignored — rebuild with `orchestrate.sh`)
-
-Run it on a different model, a different task, a different week — and please open an issue if you get a different verdict, especially a positive one on a workload type I didn't cover.
-
-— [@sixhobbits](https://github.com/sixhobbits), 2026-06-04
+— [@sixhobbits](https://github.com/sixhobbits), Ritza, 2026-06-04

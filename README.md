@@ -4,12 +4,14 @@ A skeptical, reproducible test of whether [Headroom](https://github.com/choprate
 
 ## What we're measuring
 
-Same model, same prompt, same starting state, **six runs**:
+Same model, same prompt, same starting state. **Two rounds of six runs each** (12 total):
 
-- 3 with vanilla Codex CLI
-- 3 with `headroom wrap codex` (proxy + context tool + MCP retrieve)
+- **Round 1 (trials 1–6)** — a small 3-command CLI ([`PROMPT-v1.md`](PROMPT-v1.md))
+- **Round 2 (trials 7–12)** — a heavy 8-command CLI with FTS5, async, CI, Docker ([`PROMPT.md`](PROMPT.md))
 
-Runs alternate (V, H, V, H, V, H) to spread time-of-day variance.
+Within each round: 3 with vanilla Codex CLI, 3 with `headroom wrap codex` (proxy + context tool + MCP retrieve), alternating (V, H, V, H, V, H) to spread time-of-day variance.
+
+**Headline finding:** Headroom's token savings scale with task size — a wash (+0.3%) on the small task, **−24.6% mean / −31% median** billed tokens on the heavy task, at a cost of ~15% more wall-clock time. All 12 runs shipped a working app. Details in [RESULTS.md](RESULTS.md) and [JUDGMENT.md](JUDGMENT.md).
 
 For each run we capture:
 - Token usage (input, cached, output, reasoning) — parsed from Codex `--json` events
