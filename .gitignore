@@ -1,2 +1,2 @@
-# Large per-run artifacts. The summary JSONs and events.jsonl are committed.
-runs/*/workspace.tar.gz
+# (workspace tarballs are small and committed as proof of working output)
+
