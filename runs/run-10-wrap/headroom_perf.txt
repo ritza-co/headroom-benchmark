@@ -1,0 +1,5 @@
+bash: line 1: cd: /tmp/headroom-benchmark: No such file or directory
+No performance data found in ~/.headroom/logs/
+
+Start the proxy to begin collecting data:
+  headroom proxy

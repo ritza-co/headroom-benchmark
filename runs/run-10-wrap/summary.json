@@ -1,0 +1,16 @@
+{
+  "mode": "wrap",
+  "trial": 10,
+  "timestamp_utc": "2026-06-04T15:23:46.502940Z",
+  "wall_secs": 457,
+  "turns": 1,
+  "tool_calls": 33,
+  "web_searches": 1,
+  "agent_messages": 33,
+  "input_tokens": 1236570,
+  "cached_input_tokens": 1171968,
+  "fresh_input_tokens": 64602,
+  "output_tokens": 18037,
+  "reasoning_output_tokens": 1991,
+  "total_billed_tokens": 84630
+}
