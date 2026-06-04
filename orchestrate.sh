@@ -85,28 +85,47 @@ run_trial() {
     limactl shell "$vm" bash -lc "export PATH=\"\$HOME/.local/bin:\$PATH\"; headroom perf --json 2>/dev/null || headroom perf 2>/dev/null" > "$out_dir/headroom_perf.txt" 2>&1 || true
   fi
 
-  # Quick token sum from JSONL
+  # Parse summary from JSONL
   python3 - <<PY > "$out_dir/summary.json"
-import json, sys
+import json, datetime
 total_in = total_cached = total_out = total_reason = turns = 0
+tool_calls = web_searches = agent_msgs = 0
 with open("$out_dir/events.jsonl") as f:
     for line in f:
         try:
             ev = json.loads(line)
         except Exception:
             continue
-        if ev.get("type") == "turn.completed":
+        t = ev.get("type")
+        if t == "turn.completed":
             turns += 1
             u = ev.get("usage", {})
             total_in += u.get("input_tokens", 0)
             total_cached += u.get("cached_input_tokens", 0)
             total_out += u.get("output_tokens", 0)
             total_reason += u.get("reasoning_output_tokens", 0)
+        elif t == "item.completed":
+            it = ev.get("item", {})
+            it_type = it.get("type")
+            if it_type == "command_execution":
+                tool_calls += 1
+                cmd = it.get("command", "")
+                if "web_search" in cmd or "websearch" in cmd:
+                    web_searches += 1
+            elif it_type == "web_search":
+                web_searches += 1
+                tool_calls += 1
+            elif it_type == "agent_message":
+                agent_msgs += 1
 print(json.dumps({
     "mode": "$mode",
     "trial": $trial_num,
+    "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
     "wall_secs": $wall_secs,
     "turns": turns,
+    "tool_calls": tool_calls,
+    "web_searches": web_searches,
+    "agent_messages": agent_msgs,
     "input_tokens": total_in,
     "cached_input_tokens": total_cached,
     "fresh_input_tokens": total_in - total_cached,
@@ -122,13 +141,24 @@ PY
 
 # Alternating order spreads time-of-day API variance fairly
 ORDER=(vanilla wrap vanilla wrap vanilla wrap)
-for i in 1 2 3 4 5 6; do
+
+# Optionally run only specific trials:  ./orchestrate.sh 1 2   (runs only trials 1 and 2)
+TRIALS=("$@")
+if [[ ${#TRIALS[@]} -eq 0 ]]; then
+  TRIALS=(1 2 3 4 5 6)
+fi
+
+for i in "${TRIALS[@]}"; do
   mode="${ORDER[$((i-1))]}"
   run_trial "$i" "$mode"
+  # Commit after every trial so we never lose data if the next one blows up.
+  cd "$REPO_ROOT"
+  git add "runs/run-$i-$mode" 2>/dev/null || true
+  git commit -m "Trial $i ($mode): $(cat runs/run-$i-$mode/wall_secs.txt 2>/dev/null || echo '?')s wall" --allow-empty -q || true
 done
 
 echo ""
 echo "============================================================"
-echo " ALL 6 TRIALS COMPLETE"
+echo " RUN COMPLETE for trials: ${TRIALS[*]}"
 echo "============================================================"
 ls -la "$RUNS_DIR"
